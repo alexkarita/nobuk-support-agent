@@ -20,6 +20,10 @@ ORDERS = {
 
 _tickets = json.loads(DATA_FILE.read_text()) if DATA_FILE.exists() else []
 _escalations = json.loads(ESCALATIONS_FILE.read_text()) if ESCALATIONS_FILE.exists() else []
+LAST_ESCALATION_TICKET_ID = None
+
+FEEDBACK_FILE = Path(__file__).parent / "feedback.json"
+_feedback = json.loads(FEEDBACK_FILE.read_text()) if FEEDBACK_FILE.exists() else []
 
 
 def get_order_status(order_id: str) -> dict:
@@ -110,18 +114,21 @@ def escalate_to_human(reason: str, transcript=None) -> dict:
         "subject": subject,
         "reason": reason,
         "transcript": transcript or [],
+        "replies": [],
         "status": "open",
         "priority": "high",
         "created_at": datetime.utcnow().isoformat(),
     }
 
-    external = _post_zendesk(subject, description) or _post_freshdesk(subject, description) or _post_webhook({"ticket_id": ticket_id, "subject": subject, "description": description})
+    external = _post_zendesk(subject, description) or _post_webhook({"ticket_id": ticket_id, "subject": subject, "description": description})
     if external:
         record["external"] = external
 
     _escalations.append(record)
     ESCALATIONS_FILE.write_text(json.dumps(_escalations, indent=2))
 
+    global LAST_ESCALATION_TICKET_ID
+    LAST_ESCALATION_TICKET_ID = ticket_id
     return {
         "escalated": True,
         "ticket_id": ticket_id,
@@ -129,3 +136,41 @@ def escalate_to_human(reason: str, transcript=None) -> dict:
         "external": external,
         "message": "A Nobuk human agent will take over this conversation shortly. Your ticket number is " + ticket_id + ".",
     }
+
+def record_feedback(session_id: str, rating: str, comment: str = "") -> dict:
+    entry = {"session_id": session_id, "rating": rating, "comment": comment, "created_at": datetime.utcnow().isoformat()}
+    _feedback.append(entry)
+    FEEDBACK_FILE.write_text(json.dumps(_feedback, indent=2))
+    return entry
+
+
+def get_analytics() -> dict:
+    total_tickets = len(_tickets)
+    total_escalations = len(_escalations)
+    open_escalations = sum(1 for e in _escalations if e.get("status") == "open")
+    up = sum(1 for f in _feedback if f.get("rating") == "up")
+    down = sum(1 for f in _feedback if f.get("rating") == "down")
+    return {
+        "tickets": total_tickets,
+        "escalations": total_escalations,
+        "open_escalations": open_escalations,
+        "feedback_up": up,
+        "feedback_down": down,
+        "feedback_total": len(_feedback),
+    }
+
+
+def add_reply(ticket_id: str, message: str, author: str = "support") -> bool:
+    for e in _escalations:
+        if e.get("id") == ticket_id:
+            e.setdefault("replies", []).append({"author": author, "message": message, "created_at": datetime.utcnow().isoformat()})
+            ESCALATIONS_FILE.write_text(json.dumps(_escalations, indent=2))
+            return True
+    return False
+
+
+def get_ticket(ticket_id: str):
+    for e in _escalations:
+        if e.get("id") == ticket_id:
+            return e
+    return None

@@ -20,9 +20,10 @@ Guidelines:
 - Answer questions about Nobuk using search_knowledge_base first.
 - Use tools to look up orders, process refunds, or file tickets.
 - You cannot cancel a subscription directly; create a ticket instead if a customer wants that.
-- Escalate to a human when the customer asks, is very upset, or you cannot help.
+- CRITICAL: When the customer asks to talk to a human, you MUST call the escalate_to_human tool immediately. Do not just say you are connecting; actually call the tool. Pass a short reason summarizing the issue.
 - Never invent order IDs, prices, or policies. Ask for clarification if unclear.
 - Be concise and helpful.
+- Reply in the same language the customer uses (English or Swahili). If they write in Swahili, respond in Swahili.
 """
 
 _transcripts = {}  # session_id -> list of {"role": ..., "text": ...}
@@ -96,6 +97,8 @@ def chat(session_id: str, user_message: str) -> str:
     record(session_id, "user", user_message)
     CURRENT_SESSION = session_id
 
+    intent_escalate = any(k in user_message.lower() for k in ["human", "agent", "person", "representative", "support team", "real person"])
+
     delay = 0.5
     try:
         for _attempt in range(2):
@@ -107,6 +110,17 @@ def chat(session_id: str, user_message: str) -> str:
                     text = (reply.text or "").strip()
                     if not text:
                         text = "Okay!"
+                    # If an escalation happened, ensure the ticket id is surfaced
+                    try:
+                        if intent_escalate and tickets.LAST_ESCALATION_TICKET_ID is None:
+                            t = tickets.escalate_to_human(user_message)
+                            tickets.LAST_ESCALATION_TICKET_ID = t.get("ticket_id")
+                        tid = tickets.LAST_ESCALATION_TICKET_ID
+                        if tid and tid not in text:
+                            text += f"\n\nYour ticket number is **{tid}**."
+                        tickets.LAST_ESCALATION_TICKET_ID = None
+                    except Exception:
+                        pass
                     record(session_id, "assistant", text)
                     return text
                 except Exception as e:
